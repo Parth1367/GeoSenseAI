@@ -10,3 +10,22 @@ weights/
 
 .DS_Store
 Thumbs.db
+
+# Virtual Environment
+venv/
+
+# Python
+__pycache__/
+*.pyc
+
+# Dataset
+data/
+
+# Model Weights
+weights/
+
+# Outputs
+outputs/
+
+# Notebook Checkpoints
+.ipynb_checkpoints/
