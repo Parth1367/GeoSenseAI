@@ -29,3 +29,31 @@ outputs/
 
 # Notebook Checkpoints
 .ipynb_checkpoints/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual Environment
+venv/
+.env
+
+# VS Code
+.vscode/
+
+# Logs
+outputs/logs/
+
+# Model Weights
+weights/
+*.pth
+*.pt
+
+# Dataset
+data/
+
+# OS
+.DS_Store
+Thumbs.db
