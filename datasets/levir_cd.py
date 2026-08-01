@@ -60,6 +60,10 @@ class LEVIRCDDataset(Dataset):
         before = cv2.cvtColor(before, cv2.COLOR_BGR2RGB)
         after = cv2.cvtColor(after, cv2.COLOR_BGR2RGB)
 
+        before = cv2.resize(before, (256, 256))
+        after = cv2.resize(after, (256, 256))
+        mask = cv2.resize(mask, (256, 256), interpolation=cv2.INTER_NEAREST)
+
         before = torch.from_numpy(before).permute(2, 0, 1).float() / 255.0
         after = torch.from_numpy(after).permute(2, 0, 1).float() / 255.0
         mask = torch.from_numpy(mask).unsqueeze(0).float() / 255.0
