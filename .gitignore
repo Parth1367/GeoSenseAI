@@ -57,3 +57,13 @@ data/
 # OS
 .DS_Store
 Thumbs.db
+
+venv/
+__pycache__/
+*.pyc
+
+weights/*.pth
+weights/v2/*.pth
+
+outputs/
+*.log

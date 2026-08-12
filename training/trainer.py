@@ -1,8 +1,18 @@
 """
 GeoSenseAI Trainer
+
+Features:
+    - GPU / CPU support
+    - Automatic Mixed Precision (AMP) on CUDA
+    - Gradient scaling
+    - Validation metrics
+    - Learning-rate scheduling
+    - Checkpoint saving
+    - Epoch timing
 """
 
 from pathlib import Path
+import time
 
 import torch
 from torch.optim import AdamW
@@ -30,19 +40,33 @@ class Trainer:
     ):
 
         self.model = model
+
         self.train_loader = train_loader
         self.val_loader = val_loader
 
         self.device = config.DEVICE
+
         self.model.to(self.device)
 
+        # =================================================
+        # Loss
+        # =================================================
+
         self.loss_fn = BCEDiceLoss()
+
+        # =================================================
+        # Optimizer
+        # =================================================
 
         self.optimizer = AdamW(
             self.model.parameters(),
             lr=config.LEARNING_RATE,
             weight_decay=config.WEIGHT_DECAY,
         )
+
+        # =================================================
+        # Scheduler
+        # =================================================
 
         self.scheduler = ReduceLROnPlateau(
             self.optimizer,
@@ -51,10 +75,39 @@ class Trainer:
             patience=3,
         )
 
+        # =================================================
+        # AMP
+        # =================================================
+
+        self.use_amp = self.device.type == "cuda"
+
+        self.scaler = torch.amp.GradScaler(
+            "cuda",
+            enabled=self.use_amp
+        )
+
+        # =================================================
+        # Checkpoints
+        # =================================================
+
         self.best_loss = float("inf")
 
-        self.checkpoint_dir = Path(config.CHECKPOINT_DIR)
-        self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        self.checkpoint_dir = Path(
+            config.CHECKPOINT_DIR
+        )
+
+        self.checkpoint_dir.mkdir(
+            parents=True,
+            exist_ok=True
+        )
+
+        print(
+            f"AMP Enabled : {self.use_amp}"
+        )
+
+    # =====================================================
+    # TRAIN
+    # =====================================================
 
     def train_one_epoch(self):
 
@@ -64,30 +117,102 @@ class Trainer:
         total_iou = 0.0
         total_dice = 0.0
 
-        progress = tqdm(self.train_loader, desc="Training", leave=False)
+        start_time = time.time()
+
+        progress = tqdm(
+            self.train_loader,
+            desc="Training",
+            leave=False
+        )
 
         for before, after, mask in progress:
 
-            before = before.to(self.device, non_blocking=True)
-            after = after.to(self.device, non_blocking=True)
-            mask = mask.to(self.device, non_blocking=True)
+            before = before.to(
+                self.device,
+                non_blocking=True
+            )
 
-            self.optimizer.zero_grad()
+            after = after.to(
+                self.device,
+                non_blocking=True
+            )
 
-            prediction = self.model(before, after)
+            mask = mask.to(
+                self.device,
+                non_blocking=True
+            )
 
-            loss = self.loss_fn(prediction, mask)
+            # ---------------------------------------------
+            # Clear gradients
+            # ---------------------------------------------
 
-            loss.backward()
+            self.optimizer.zero_grad(
+                set_to_none=True
+            )
 
-            self.optimizer.step()
+            # ---------------------------------------------
+            # Forward + AMP
+            # ---------------------------------------------
+
+            with torch.autocast(
+                device_type=self.device.type,
+                dtype=torch.float16,
+                enabled=self.use_amp
+            ):
+
+                prediction = self.model(
+                    before,
+                    after
+                )
+
+                loss = self.loss_fn(
+                    prediction,
+                    mask
+                )
+
+            # ---------------------------------------------
+            # Backward
+            # ---------------------------------------------
+
+            if self.use_amp:
+
+                self.scaler.scale(
+                    loss
+                ).backward()
+
+                self.scaler.step(
+                    self.optimizer
+                )
+
+                self.scaler.update()
+
+            else:
+
+                loss.backward()
+
+                self.optimizer.step()
+
+            # ---------------------------------------------
+            # Metrics
+            # ---------------------------------------------
 
             total_loss += loss.item()
 
-            total_iou += iou_score(prediction.detach(), mask)
-            total_dice += dice_score(prediction.detach(), mask)
+            total_iou += iou_score(
+                prediction.detach(),
+                mask
+            )
 
-            progress.set_postfix(loss=loss.item())
+            total_dice += dice_score(
+                prediction.detach(),
+                mask
+            )
+
+            progress.set_postfix(
+                loss=f"{loss.item():.4f}"
+            )
+
+        epoch_time = time.time() - start_time
 
         n = len(self.train_loader)
 
@@ -95,7 +220,12 @@ class Trainer:
             "loss": total_loss / n,
             "iou": total_iou / n,
             "dice": total_dice / n,
+            "time": epoch_time,
         }
+
+    # =====================================================
+    # VALIDATION
+    # =====================================================
 
     @torch.no_grad()
     def validate(self):
@@ -109,25 +239,79 @@ class Trainer:
         total_recall = 0.0
         total_f1 = 0.0
 
-        progress = tqdm(self.val_loader, desc="Validation", leave=False)
+        progress = tqdm(
+            self.val_loader,
+            desc="Validation",
+            leave=False
+        )
 
         for before, after, mask in progress:
 
-            before = before.to(self.device)
-            after = after.to(self.device)
-            mask = mask.to(self.device)
+            before = before.to(
+                self.device,
+                non_blocking=True
+            )
 
-            prediction = self.model(before, after)
+            after = after.to(
+                self.device,
+                non_blocking=True
+            )
 
-            loss = self.loss_fn(prediction, mask)
+            mask = mask.to(
+                self.device,
+                non_blocking=True
+            )
+
+            # ---------------------------------------------
+            # AMP inference
+            # ---------------------------------------------
+
+            with torch.autocast(
+                device_type=self.device.type,
+                dtype=torch.float16,
+                enabled=self.use_amp
+            ):
+
+                prediction = self.model(
+                    before,
+                    after
+                )
+
+                loss = self.loss_fn(
+                    prediction,
+                    mask
+                )
+
+            # ---------------------------------------------
+            # Metrics
+            # ---------------------------------------------
 
             total_loss += loss.item()
 
-            total_iou += iou_score(prediction, mask)
-            total_dice += dice_score(prediction, mask)
-            total_precision += precision_score(prediction, mask)
-            total_recall += recall_score(prediction, mask)
-            total_f1 += f1_score(prediction, mask)
+            total_iou += iou_score(
+                prediction,
+                mask
+            )
+
+            total_dice += dice_score(
+                prediction,
+                mask
+            )
+
+            total_precision += precision_score(
+                prediction,
+                mask
+            )
+
+            total_recall += recall_score(
+                prediction,
+                mask
+            )
+
+            total_f1 += f1_score(
+                prediction,
+                mask
+            )
 
         n = len(self.val_loader)
 
@@ -140,60 +324,165 @@ class Trainer:
             "f1": total_f1 / n,
         }
 
-    def fit(self, num_epochs, checkpoint=None):
+    # =====================================================
+    # FIT
+    # =====================================================
+
+    def fit(
+        self,
+        num_epochs,
+        checkpoint=None
+    ):
+
+        # -------------------------------------------------
+        # Resume checkpoint
+        # -------------------------------------------------
 
         if checkpoint is not None:
-            self.model.load_state_dict(checkpoint["model_state_dict"])
-            self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+
+            self.model.load_state_dict(
+                checkpoint["model_state_dict"]
+            )
+
+            self.optimizer.load_state_dict(
+                checkpoint["optimizer_state_dict"]
+            )
+
+            print(
+                "✓ Checkpoint loaded"
+            )
+
+        # -------------------------------------------------
+        # Training loop
+        # -------------------------------------------------
 
         for epoch in range(num_epochs):
 
+            print()
             print("=" * 60)
-            print(f"Epoch [{epoch + 1}/{num_epochs}]")
+            print(
+                f"Epoch [{epoch + 1}/{num_epochs}]"
+            )
             print("=" * 60)
 
-            train_metrics = self.train_one_epoch()
+            # ---------------------------------------------
+            # Training
+            # ---------------------------------------------
+
+            train_metrics = (
+                self.train_one_epoch()
+            )
+
+            # ---------------------------------------------
+            # Validation
+            # ---------------------------------------------
 
             val_metrics = self.validate()
 
-            self.scheduler.step(val_metrics["loss"])
+            # ---------------------------------------------
+            # Scheduler
+            # ---------------------------------------------
+
+            self.scheduler.step(
+                val_metrics["loss"]
+            )
+
+            current_lr = (
+                self.optimizer
+                .param_groups[0]["lr"]
+            )
+
+            # ---------------------------------------------
+            # Results
+            # ---------------------------------------------
+
+            print()
 
             print(
-                f"Train Loss : {train_metrics['loss']:.4f} | "
-                f"IoU : {train_metrics['iou']:.4f} | "
-                f"Dice : {train_metrics['dice']:.4f}"
+                f"Train Loss : "
+                f"{train_metrics['loss']:.4f} | "
+                f"IoU : "
+                f"{train_metrics['iou']:.4f} | "
+                f"Dice : "
+                f"{train_metrics['dice']:.4f}"
             )
 
             print(
-                f"Val Loss : {val_metrics['loss']:.4f} | "
-                f"IoU : {val_metrics['iou']:.4f} | "
-                f"Dice : {val_metrics['dice']:.4f} | "
-                f"Precision : {val_metrics['precision']:.4f} | "
-                f"Recall : {val_metrics['recall']:.4f} | "
-                f"F1 : {val_metrics['f1']:.4f}"
+                f"Val Loss : "
+                f"{val_metrics['loss']:.4f} | "
+                f"IoU : "
+                f"{val_metrics['iou']:.4f} | "
+                f"Dice : "
+                f"{val_metrics['dice']:.4f} | "
+                f"Precision : "
+                f"{val_metrics['precision']:.4f} | "
+                f"Recall : "
+                f"{val_metrics['recall']:.4f} | "
+                f"F1 : "
+                f"{val_metrics['f1']:.4f}"
             )
 
-            checkpoint = {
+            print(
+                f"Learning Rate : {current_lr:.6f}"
+            )
+
+            print(
+                f"Epoch Time : "
+                f"{train_metrics['time'] / 60:.2f} minutes"
+            )
+
+            # ---------------------------------------------
+            # Checkpoint
+            # ---------------------------------------------
+
+            checkpoint_data = {
+
                 "epoch": epoch,
-                "model_state_dict": self.model.state_dict(),
-                "optimizer_state_dict": self.optimizer.state_dict(),
-                "loss": val_metrics["loss"],
+
+                "model_state_dict":
+                    self.model.state_dict(),
+
+                "optimizer_state_dict":
+                    self.optimizer.state_dict(),
+
+                "scheduler_state_dict":
+                    self.scheduler.state_dict(),
+
+                "loss":
+                    val_metrics["loss"],
+
             }
 
+            # Last model
+
             torch.save(
-                checkpoint,
-                self.checkpoint_dir / "last_model.pth",
+                checkpoint_data,
+                self.checkpoint_dir
+                / "last_model.pth"
             )
 
-            if val_metrics["loss"] < self.best_loss:
+            # Best model
 
-                self.best_loss = val_metrics["loss"]
+            if (
+                val_metrics["loss"]
+                < self.best_loss
+            ):
 
-                torch.save(
-                    checkpoint,
-                    self.checkpoint_dir / "best_model.pth",
+                self.best_loss = (
+                    val_metrics["loss"]
                 )
 
-                print("✅ Best model saved!")
+                torch.save(
+                    checkpoint_data,
+                    self.checkpoint_dir
+                    / "best_model.pth"
+                )
 
-        print("\n🎉 Training Completed!")
+                print(
+                    "✅ Best model saved!"
+                )
+
+        print()
+        print("=" * 60)
+        print("🎉 Training Completed!")
+        print("=" * 60)
