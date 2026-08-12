@@ -67,3 +67,4 @@ weights/v2/*.pth
 
 outputs/
 *.log
+tests/batch_visualization.py
