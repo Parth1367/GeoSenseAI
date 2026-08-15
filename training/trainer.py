@@ -165,10 +165,15 @@ class Trainer:
                     after
                 )
 
-                loss = self.loss_fn(
-                    prediction,
-                    mask
-                )
+            # Loss computed in fp32 — DiceLoss involves sigmoid
+            # and division, which can overflow/underflow under
+            # fp16 and silently produce NaN. BCEWithLogitsLoss
+            # is fine in fp16, but Dice isn't, so the whole
+            # loss computation is cast up to fp32 for safety.
+            loss = self.loss_fn(
+                prediction.float(),
+                mask
+            )
 
             # ---------------------------------------------
             # Backward
@@ -277,10 +282,12 @@ class Trainer:
                     after
                 )
 
-                loss = self.loss_fn(
-                    prediction,
-                    mask
-                )
+            # Same fp32 cast as training — this is the fix for
+            # val loss showing up as NaN.
+            loss = self.loss_fn(
+                prediction.float(),
+                mask
+            )
 
             # ---------------------------------------------
             # Metrics
@@ -331,7 +338,8 @@ class Trainer:
     def fit(
         self,
         num_epochs,
-        checkpoint=None
+        checkpoint=None,
+        resume_lr=None,
     ):
 
         # -------------------------------------------------
@@ -351,6 +359,25 @@ class Trainer:
             print(
                 "✓ Checkpoint loaded"
             )
+
+            # ---------------------------------------------
+            # Optional LR reset on resume.
+            #
+            # If a previous run's scheduler collapsed the LR
+            # (e.g. due to a NaN val loss bug always failing
+            # the "improved" check), the optimizer state we
+            # just loaded carries that collapsed LR forward.
+            # This lets us override it explicitly.
+            # ---------------------------------------------
+
+            if resume_lr is not None:
+
+                for group in self.optimizer.param_groups:
+                    group["lr"] = resume_lr
+
+                print(
+                    f"✓ Learning rate reset to {resume_lr}"
+                )
 
         # -------------------------------------------------
         # Training loop
@@ -381,11 +408,30 @@ class Trainer:
 
             # ---------------------------------------------
             # Scheduler
+            #
+            # Guard against NaN val loss ever corrupting the
+            # schedule again — NaN comparisons are always
+            # False, which previously caused the scheduler to
+            # think "no improvement" every single epoch and
+            # collapse the LR. If this ever happens again, skip
+            # the step instead of feeding it garbage.
             # ---------------------------------------------
 
-            self.scheduler.step(
-                val_metrics["loss"]
-            )
+            val_loss = val_metrics["loss"]
+
+            if val_loss == val_loss:  # False only when NaN
+
+                self.scheduler.step(
+                    val_loss
+                )
+
+            else:
+
+                print(
+                    "⚠️  Val loss is NaN this epoch — "
+                    "skipping scheduler step to avoid "
+                    "corrupting the learning rate."
+                )
 
             current_lr = (
                 self.optimizer

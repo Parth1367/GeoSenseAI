@@ -45,6 +45,10 @@ from models.geosense_ai import GeoSenseAI
 
 THRESHOLD = 0.30
 
+# ImageNet stats — must match datasets/levir_cd.py normalization
+MEAN = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
+STD = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
+
 OUTPUT_DIR = (
     PROJECT_ROOT
     / "outputs"
@@ -106,6 +110,9 @@ def load_image(path):
         .float()
         / 255.0
     )
+
+    # Normalize with ImageNet stats (must match training)
+    image_tensor = (image_tensor - MEAN) / STD
 
     return image, image_tensor
 

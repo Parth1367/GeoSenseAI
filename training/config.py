@@ -1,5 +1,5 @@
 """
-GeoSenseAI V2 Training Configuration
+GeoSenseAI V5 Training Configuration
 """
 
 from pathlib import Path
@@ -38,7 +38,14 @@ IMAGE_SIZE = 256
 # GTX 1650 4GB
 BATCH_SIZE = 1
 
-# V2 benchmark
+# NOTE: train.py now auto-resumes from weights/v5/last_model.pth
+# if it exists. This number is "how many MORE epochs to run
+# from wherever the last checkpoint left off" — NOT total
+# epochs since the beginning. Since 3 epochs are already done,
+# setting this to 30 means ~33 total epochs of training.
+#
+# At ~32 min/epoch, 30 epochs ≈ 16 hours. Run this overnight
+# or during a long block of uninterrupted time.
 NUM_EPOCHS = 30
 
 LEARNING_RATE = 1e-4
@@ -108,23 +115,23 @@ PREDICTION_DIR.mkdir(
 
 
 # ============================================================
-# V2 CHECKPOINTS
+# V5 CHECKPOINTS
 # ============================================================
 
 # IMPORTANT:
-# V1 checkpoints are NOT touched.
+# V1, V2, V3, V4 checkpoints are NOT touched.
 #
-# V1:
-#   weights/best_model.pth
-#   weights/last_model.pth
+# V3 (current best, do not overwrite):
+#   weights/v3/best_model.pth
+#   weights/v3/last_model.pth
 #
-# V2:
-#   weights/v2/best_model.pth
-#   weights/v2/last_model.pth
+# V5:
+#   weights/v5/best_model.pth
+#   weights/v5/last_model.pth
 
 CHECKPOINT_DIR = (
     Path("weights")
-    / "v2"
+    / "v5"
 )
 
 CHECKPOINT_DIR.mkdir(
@@ -157,7 +164,7 @@ SEED = 42
 # ============================================================
 
 print("=" * 60)
-print("GeoSenseAI V2 Configuration")
+print("GeoSenseAI V5 Configuration")
 print("=" * 60)
 
 print(

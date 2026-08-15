@@ -36,6 +36,7 @@ if torch.cuda.is_available():
 import training.config as config
 
 from datasets.levir_cd import LEVIRCDDataset
+from datasets.transforms import joint_transform
 from models.geosense_ai import GeoSenseAI
 from training.trainer import Trainer
 
@@ -84,7 +85,8 @@ def main():
 
     train_dataset = LEVIRCDDataset(
         root_dir=config.DATASET_PATH,
-        split="train"
+        split="train",
+        transform=joint_transform
     )
 
     val_dataset = LEVIRCDDataset(
@@ -176,6 +178,34 @@ def main():
     )
 
     # ========================================================
+    # RESUME (if a previous checkpoint exists)
+    # ========================================================
+
+    checkpoint = None
+
+    last_checkpoint_path = (
+        config.CHECKPOINT_DIR
+        / "last_model.pth"
+    )
+
+    if last_checkpoint_path.exists():
+
+        print()
+        print(
+            f"Found existing checkpoint: {last_checkpoint_path}"
+        )
+
+        print(
+            "Resuming from this checkpoint "
+            "(model + optimizer weights restored)..."
+        )
+
+        checkpoint = torch.load(
+            last_checkpoint_path,
+            map_location=config.DEVICE
+        )
+
+    # ========================================================
     # TRAINING
     # ========================================================
 
@@ -185,7 +215,13 @@ def main():
     print("=" * 60)
 
     trainer.fit(
-        config.NUM_EPOCHS
+        config.NUM_EPOCHS,
+        checkpoint=checkpoint,
+        # Previous run's val-loss NaN bug collapsed the LR to
+        # ~1e-6 via a corrupted scheduler. Reset it to a
+        # healthy value when resuming so training can actually
+        # keep improving now that the bug is fixed.
+        resume_lr=3e-5 if checkpoint is not None else None,
     )
 
     # ========================================================
